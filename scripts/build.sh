@@ -2,5 +2,5 @@
 
 echo "Running Count O Tests"
 cd ..
-docker build -t myproj-unittests .
-docker run --rm myproj-unittests
+docker build -t count-o .
+docker run --rm count-o

@@ -1,11 +1,119 @@
-/* Requires the Docker Pipeline plugin */
 pipeline {
-    agent { docker { image 'python:3.14.2-alpine3.23' } }
-    stages {
-        stage('build') {
-            steps {
-                sh 'python --version'
-            }
-        }
+  agent any
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+  }
+
+  environment {
+    // Jenkins Credentials ID that stores Docker Hub username+token/password
+    DOCKERHUB_CREDS = 'dockerhub-creds'
+
+    // Change to: "yourdockerhubuser/yourrepo"
+    IMAGE_NAME = 'shahlll/counto'
+
+    // Change if your default branch isn't main
+    MAIN_BRANCH = 'main'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
     }
+
+    stage('Detect changes (src/tests only)') {
+      steps {
+        script {
+          // Works for normal builds. For the very first build, compare against previous commit if possible.
+          def base = sh(script: "git rev-parse HEAD~1 || true", returnStdout: true).trim()
+          def head = sh(script: "git rev-parse HEAD", returnStdout: true).trim()
+
+          def diff = ""
+          if (base) {
+            diff = sh(script: "git diff --name-only ${base} ${head}", returnStdout: true).trim()
+          } else {
+            // First run: treat as changed so pipeline can establish baseline
+            diff = "src/ test/"
+          }
+
+          echo "Changed files:\n${diff}"
+
+          def relevant = diff.readLines().any { p ->
+            p.startsWith("src/") || p.startsWith("test/") || p == "Dockerfile"
+          }
+
+          env.RELEVANT_CHANGE = relevant ? "true" : "false"
+          echo "Relevant change? ${env.RELEVANT_CHANGE}"
+        }
+      }
+    }
+
+    stage('Build Docker image') {
+      when { expression { env.RELEVANT_CHANGE == "true" } }
+      steps {
+        script {
+          env.GIT_SHA = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+          env.IMAGE_TAG = "${IMAGE_NAME}:${env.GIT_SHA}"
+
+          sh "docker build -t ${env.IMAGE_TAG} ."
+        }
+      }
+    }
+
+    stage('Run unit tests (inside container)') {
+      when { expression { env.RELEVANT_CHANGE == "true" } }
+      steps {
+        // Assumes Dockerfile CMD runs tests and exits non-zero on failure.
+        sh "docker run --rm ${env.IMAGE_TAG}"
+      }
+    }
+
+    stage('Push to Docker Hub (only if tests passed)') {
+      when {
+        allOf {
+          expression { env.RELEVANT_CHANGE == "true" }
+          // Only push from main (adjust/remove if you want pushes from any branch)
+          branch "${MAIN_BRANCH}"
+        }
+      }
+      steps {
+        script {
+          withCredentials([usernamePassword(
+            credentialsId: DOCKERHUB_CREDS,
+            usernameVariable: 'DH_USER',
+            passwordVariable: 'DH_PASS'
+          )]) {
+            sh """
+              echo "${DH_PASS}" | docker login -u "${DH_USER}" --password-stdin
+              docker push ${env.IMAGE_TAG}
+              docker tag ${env.IMAGE_TAG} ${IMAGE_NAME}:latest
+              docker push ${IMAGE_NAME}:latest
+              docker logout
+            """
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      script {
+        // Best-effort cleanup (won’t fail the build if it errors)
+        if (env.IMAGE_TAG) {
+          sh "docker image rm -f ${env.IMAGE_TAG} || true"
+        }
+      }
+      cleanWs()
+    }
+    success {
+      echo "✅ Pipeline succeeded."
+    }
+    failure {
+      echo "❌ Pipeline failed (tests failed or build error). No Docker Hub push occurred."
+    }
+  }
 }
