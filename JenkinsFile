@@ -72,13 +72,7 @@ pipeline {
     }
 
     stage('Push to Docker Hub (only if tests passed)') {
-      when {
-        allOf {
-          expression { env.RELEVANT_CHANGE == "true" }
-          // Only push from main (adjust/remove if you want pushes from any branch)
-          branch "${MAIN_BRANCH}"
-        }
-      }
+      when {expression { env.RELEVANT_CHANGE == "true" }}
       steps {
         script {
           withCredentials([usernamePassword(
