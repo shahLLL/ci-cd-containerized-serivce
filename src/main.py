@@ -17,6 +17,3 @@ def count_o(input_string):
     
     return output_string + str(counter)
         
-
-#print(count_o("Hello, World!"))
-#print()
