@@ -1,3 +1,4 @@
+# Variables
 output_string = "The number of O's in the provided input string: "
 type_error_string = "The provided input is not a string!"
 
